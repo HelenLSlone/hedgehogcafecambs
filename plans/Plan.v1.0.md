@@ -2,7 +2,7 @@
 
 ## Overview
 
-7am-triggered pipeline: **Ring camera → AI highlight reel (video compilation) → WhatsApp delivery via OpenClaw Docker container → user feedback**. Built iteratively, one stage at a time, mock-first. Each stage is validated as a mock before wiring to the real API. The process diagram is in [docs/Process.v1.md](../plans/Plan.v1.md).
+Pipeline-triggered by configurable time (default 7am GMT, set via `.env` variable `PIPELINE_TRIGGER_TIME=07:00`) — **Ring camera → AI highlight reel (video compilation) → WhatsApp delivery via OpenClaw Docker container → user feedback**. Built iteratively, one stage at a time, mock-first. Each stage is validated as a mock before wiring to the real API. The process diagram is in [docs/Process.v1.md](../plans/Plan.v1.md).
 
 > **Note:** This plan uses the "third-party bridge" approach for Ring camera access (no official Smart Home API or OAuth flow). See Stage 1 Open Items for details.
 >
@@ -25,11 +25,11 @@
 
 ## Stage 0 — Scaffold + Schedule Trigger (No External Dependencies)
 
-**Goal**: Establish the runnable entry point, schedule trigger, error handling shell, configuration scaffold, and test foundation. Scheduled at 7am via Mac launchd (`.plist`) — default approach; Python `sched` stays as a secondary fallback.
+**Goal**: Establish the runnable entry point, schedule trigger, error handling shell, configuration scaffold, and test foundation. Read trigger time from `.env` (`PIPELINE_TRIGGER_TIME`, default `07:00` GMT) via Mac launchd (`.plist`) — default approach; Python `sched` stays as a secondary fallback.
 
 | Step | Build | Validate |
 |---|---|---|
-| `schedule.py` — wrapper using Mac launchd `.plist` entry for 7am scheduling | Fires at 7am, prints timestamp | Check it fires and survives reboots |
+| `schedule.py` — reads `PIPELINE_TRIGGER_TIME` from `.env` (default `07:00` GMT) and fires pipeline; writes to logs/pipeline.log | Fires at configured time, prints timestamp | Check it fires and survives reboots |
 | `run_pipeline.py` — calls each stage function sequentially; wraps every call in try/except with logging to `logs/pipeline.log` | Output: "Ring clips retrieved", "Reel generated", "Sent to WhatsApp", "Awaiting feedback..." | Read the output stream end-to-end |
 | `config.py` — empty scaffold with TODO comments for all keys, phone numbers, credentials. Uses Pydantic `BaseModel` for `.env` validation at import time. Includes timezone config (`lat`, `lon` for sunrise/sunset calculation; `dusk_offset_minutes`, `dawn_offset_minutes` for configurable window edges). | Every stage imports from here rather than hardcoded values | Verify no secret leaks into committed history |
 | Empty `requirements.txt` (to be populated per stage) and updated `.gitignore` | Prevents accidental commits of DB files, logs, env secrets | Review `.gitignore` contents before first add |
@@ -42,7 +42,8 @@
 - WhatsApp bridge failure → store compiled video locally as `.tmp` for manual resend later
 
 **Tests (must pass before proceeding to Stage 1):**
-- `test_schedule_fires`: Schedule fires at test timestamp override (do not use real 7am)
+- `test_schedule_fires`: Schedule fires at test timestamp override (do not hardcode the trigger time in tests)
+- `test_config_loads_without_errors`: `config.py` imports cleanly, `.env` reads expected keys as strings — including `PIPELINE_TRIGGER_TIME`
 - `test_run_pipeline_calls_stubs_in_order`: `run_pipeline.py` calls stubs for each stage sequentially, in expected order
 - `test_config_loads_without_errors`: `config.py` imports cleanly, `.env` reads expected keys as strings
 - `test_gitignore_has_required_entries`: Verify `.gitignore` contains `__pycache__/`, `*.egg-info/`, `logs/`, `.env`, `data/examples.db`, `~/.ollama/models/` (once discovered)
@@ -177,8 +178,8 @@ The selected Ollama Qwen model must fulfil all of the following capabilities:
 ## Target Directory
 
 ```
-hedgehogCafeCambs/                   # ← corrected spelling (was "hedgihog")
-├── schedule.py              # Mac launchd trigger for 7am schedule
+hedgehogCafeCambs/
+├── schedule.py              # Mac launchd trigger; reads PIPELINE_TRIGGER_TIME from .env (default 07:00 GMT)
 ├── run_pipeline.py          # Entry point (chained pipeline, --retry support)
 ├── config.py                # API keys, phone numbers, credentials scaffold (TODO: add per stage)
 ├── requirements.txt         # Python deps (populated as stages are built; includes pydantic, python-dotenv, pytest)
@@ -215,8 +216,8 @@ hedgehogCafeCambs/                   # ← corrected spelling (was "hedgihog")
 |---|---|
 | Ring API unreachable | Retry queue, log to `logs/pipeline.log`, optionally fire local alert; skip reel + delivery if retries exhausted |
 | Ollama model missing or crashes | Skip reel generation entirely; log error; do NOT proceed with empty captions or no-op video output |
-| WhatsApp bridge failure | Store compiled video (.mp4) locally as `.tmp` for manual resend; log warning; retry next 7am cycle |
-| No motion events at 7am | Empty feed → Stage 2 produces "No camera activity since our last update" text fallback (no video compile) |
+| WhatsApp bridge failure | Store compiled video (.mp4) locally as `.tmp` for manual resend; log warning; retry next PIPELINE_TRIGGER_TIME cycle |
+| No motion events at PIPELINE_TRIGGER_TIME | Empty feed → Stage 2 produces "No camera activity since our last update" text fallback (no video compile) |
 | No hedgehogs detected after classification | Produce "No hedgehogs spotted today" fallback message; no video compiled |
 | Feedback channel not yet live | Use stdin-only simulation in `response_handler.py`; wire OpenClaw webhook when Docker/QR is fully set up |
 | Pydantic schema mismatch at any boundary | Structured log entry + graceful skip/retry for that stage's data; prevent downstream corruption |
