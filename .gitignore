@@ -1,3 +1,25 @@
 
+# Qwen IDE
 .qwen*
 .DS_Store
+.vscode/
+
+# Python cache
+__pycache__/
+*.egg-info/
+
+# Logs
+logs/
+
+# Secrets
+.env
+
+# Data
+data/examples.db
+
+# Ollama models (massive disk space)
+~/.ollama/models/
+
+# Virtual environments
+venv/
+.venv/
