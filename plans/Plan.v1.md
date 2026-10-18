@@ -31,7 +31,7 @@
 |---|---|---|
 | `schedule.py` — wrapper using Mac launchd `.plist` entry for 7am scheduling | Fires at 7am, prints timestamp | Check it fires and survives reboots |
 | `run_pipeline.py` — calls each stage function sequentially; wraps every call in try/except with logging to `logs/pipeline.log` | Output: "Ring clips retrieved", "Reel generated", "Sent to WhatsApp", "Awaiting feedback..." | Read the output stream end-to-end |
-| `config.py` — empty scaffold with TODO comments for all keys, phone numbers, credentials. Uses Pydantic `BaseModel` for `.env` validation at import time | Every stage imports from here rather than hardcoded values | Verify no secret leaks into committed history |
+| `config.py` — empty scaffold with TODO comments for all keys, phone numbers, credentials. Uses Pydantic `BaseModel` for `.env` validation at import time. Includes timezone config (`lat`, `lon` for sunrise/sunset calculation; `dusk_offset_minutes`, `dawn_offset_minutes` for configurable window edges). | Every stage imports from here rather than hardcoded values | Verify no secret leaks into committed history |
 | Empty `requirements.txt` (to be populated per stage) and updated `.gitignore` | Prevents accidental commits of DB files, logs, env secrets | Review `.gitignore` contents before first add |
 
 **Pydantic dependency added to `requirements.txt`:** `pydantic>=2.0` — validation for all data shapes; `python-dotenv` — config loading.
@@ -50,19 +50,23 @@
 ---
 
 ## Stage 1 — Ring API (Mock → Real, *third-party bridge approach*)
-**Goal**: Fetch motion events and clip URLs from the Ring camera via a third-party bridge (not official Smart Home API OAuth).
+**Goal**: Fetch motion events and clip URLs from the Ring camera via a third-party bridge (not official Smart Home API OAuth). **Clips are pre-filtered to a dusk-to-dawn window determined by configurable geographic coordinates.**
 
 | Step | Build | Mock State | Swap When |
 |---|---|---|---|
 | `ring_api_schema.py` — defines clip dict contract as a Pydantic model: `{clip_id, url, timestamp, duration, motion_score, thumbnail_url}` (all fields `str`, except `timestamp` → `datetime`; `duration` → `float`). Shared import for all downstream stages. | N/A — this is the data contract only | Mocks validate against this model; real API responses validated at runtime via `model_validate()` | N/A (no swap needed) |
-| `pipeline/ring_client.py` — fetches clips via third-party bridge; returns list of clip dicts matching schema | **Mock:** hardcoded test data (3 sample clip dicts with all defined fields, constructed using `ring_api_schema.Clip.model_construct()`) | Bridge library/package becomes available + test access works | → Real: replace mock with real HTTP call via the bridge |
+| `pipeline/ring_client.py` — fetches clips via third-party bridge; returns list of clip dicts matching schema. Enumerates all Ring cameras on the account, keeps only those whose name starts with `"Hedgehog Cam"`; filters dusk-to-dawn using config lat/lon + offsets. | **Mock:** hardcoded test data (3 sample clip dicts with all defined fields, constructed using `ring_api_schema.Clip.model_construct()`) | Bridge library/package becomes available + test access works | → Real: replace mock with real HTTP call via the bridge |
+| **Camera-name filter** — enumerate all cameras on the Ring account at runtime; keep only those whose name starts with `"Hedgehog Cam"`. Others are silently dropped before any API calls. No config/maintenance needed. | Enumerates all devices, drops non-matching names by prefix | All clip dicts generated in mock; test asserts only `Hedgehog Cam*` named cameras are queried | N/A (filter is always-on logic) |
+| **Time-window filter** — after fetching clips, only pass through those whose `timestamp` falls between computed dusk and dawn times for the configured location. Clips outside this window are dropped before any downstream processing. | Fetches all; then filters in-memory against computed sunrise/sunset window | All clip dicts still generated in mock; test asserts only dusk-to-dawn ones survive | N/A (filter is always-on logic) |
 | "Zero clips today" branch — when no motion events returned, pass `empty_feed=True` downstream | Stage 2 handles gracefully ("No camera activity since our last update") | Always present in staging/mock phase | No-op once real API works |
 
-**Validation:** Clips retrieved have all schema fields needed by Stage 2. Print each before moving on. "Zero clips" path produces empty list → `empty_feed=True` flag passed to next stage.
+**Validation:** Clips retrieved have all schema fields needed by Stage 2. Print each before moving on. "Zero clips" path produces empty list → `empty_feed=True` flag passed to next stage. Camera-name prefix filter validated: only cameras starting with `"Hedgehog Cam"` are queried; time-window filter validated: only clips within the dusk–dawn window pass through; off-window clips are correctly excluded.
 
 **Tests (must pass before real-API wiring at this stage):**
 - `test_mock_return_matches_ring_api_schema`: Mock clip dicts constructed with `ring_api_schema.Clip.model_validate()` succeed — confirming mocks match the shape the bridge *would* produce
 - `test_zero_clips_today_returns_empty_feed_and_flag`: When no motion events exist, pipeline returns `[]` and sets `empty_feed=True`
+- `test_camera_name_prefix_filter_keeps_only_hedgehog_cameras`: Enumerates all cameras in mock; test asserts only cameras starting with `"Hedgehog Cam"` are queried
+- `test_dusk_to_dawn_time_window_filters_clips`: With known lat/lon + offsets, mock clips spanning dusk/dawn edges are correctly accepted or rejected
 - `test_ring_client_imports_from_correct_path`: Verify `ring_api_schema.py` is importable from pipeline directory; downstream stages can `from ring_api_schema import Clip`
 
 **Open Items:**
