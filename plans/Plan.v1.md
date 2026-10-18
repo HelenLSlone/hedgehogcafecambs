@@ -225,3 +225,11 @@ hedgehogCafeCambs/                   # ← corrected spelling (was "hedgihog")
 - Ring API calls are read-only and safe to re-query.
 - `examples_store.py` `status` field (`pending/accepted/rejected`) tracks feed state across daily runs — prevents re-deleting or double-storing clips.
 - All failures produce structured log entries in `logs/pipeline.log`.
+
+---
+
+## References
+
+- [ADR-001](../docs/adr/adr-001-qwen-model-selection.md) — Qwen Ollama model selection (`qwen3-v1:30b-a3b`).
+- [ADR-002](../docs/adr/adr-002-python-frame-fetch-strategy.md) — Python-deterministic frame fetching; model consumes pre-processed frames for classification + caption.
+
