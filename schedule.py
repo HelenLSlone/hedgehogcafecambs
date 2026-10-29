@@ -17,7 +17,6 @@ from datetime import datetime as _datetime
 from pathlib import Path
 from subprocess import run as _sub_run
 
-# Placeholder
 SCRIPT_PATH = str(Path(__file__).resolve())
 
 
@@ -112,8 +111,12 @@ def unload_plist(plist_path: Path) -> int:
     return 0
 
 
-def fire_now() -> int:
-    """Run the pipeline immediately (for testing)."""
+def fire_now(keep_open: bool = False) -> int:
+    """Run the pipeline immediately (for testing).
+
+    When ``keep_open`` is True, pauses at the end so terminal output is
+    readable before auto-close on macOS.
+    """
     print("[TEST-MODE] Pipeline triggered at %s." % _datetime.now().time())
     # Import here to avoid circular imports when run_pipeline isn't on sys.path
     import subprocess as sp # pylint: disable=import-outside-toplevel
@@ -123,6 +126,14 @@ def fire_now() -> int:
         check=False,
     )
     print("[TEST-MODE] Exited with code %d." % result.returncode)
+
+    if keep_open:
+        print("Press Enter to close this window …")
+        try:
+            input()
+        except EOFError:  # non-interactive stdin — don't block forever
+            pass
+
     return result.returncode
 
 
@@ -164,6 +175,8 @@ def main() -> int:
                         help="Unload the .plist (disable daily trigger)")
     parser.add_argument("--test-now", action="store_true",
                         help="Fire pipeline now instead of waiting for scheduled trigger")
+    parser.add_argument("--keep-open", action="store_true",
+                        help="Keep terminal open after --test-now to read output")
 
     args = parser.parse_args()
 
