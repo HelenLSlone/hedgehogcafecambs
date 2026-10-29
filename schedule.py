@@ -13,11 +13,12 @@ The accompanying .plist is expected to live at:
 
 import argparse
 import sys
+from datetime import datetime as _datetime
 from pathlib import Path
 from subprocess import run as _sub_run
 
 # Placeholder
-SCRIPT_PATH=str(Path(__file__).resolve())
+SCRIPT_PATH = str(Path(__file__).resolve())
 
 
 def make_plist() -> Path:
@@ -31,6 +32,10 @@ def make_plist() -> Path:
     trigger_time = config.pipeline_trigger_time
     start_hour = str(trigger_time.hour)
     start_minute = str(trigger_time.minute).zfill(2)
+
+    log_dir = home / "Library" / "Logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = str(log_dir / "hedeghogcambs-pipeline.log")
 
     plist_path = plist_dir / "com.hedeghogcambs.pipeline.plist"
     plist_content = f"""\
@@ -53,6 +58,10 @@ def make_plist() -> Path:
     <integer>{start_minute}</integer>
     <key>RunAtLoad</key>
     <false/>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_path}</string>
 </dict>
 </plist>
 """.replace("{SCRIPT_PATH}", str(Path(__file__).resolve()))
@@ -61,48 +70,51 @@ def make_plist() -> Path:
     return plist_path
 
 
-def load_plist(plist_path: Path, domain: str = "com.hedeghogcambs.pipeline") -> int:
-    """Load the .plist into launchd so it fires at pipeline_trigger_time."""
-    from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
+def _launchd_error(label: str, err: str) -> int:
+    """Print a launchd error and optional bootstrap hint; returns exit code 1."""
+    print(f"ERROR: launchctl {label} failed: {err}")
+    if "Input/output error" in err or "bootstrap" in err:
+        print(
+            "Hint: try `launchctl bootstrap gui/$(id -u) /dev/null` then retry, "
+            "or check Disk Utility for filesystem errors."
+        )
+    return 1
 
-    _sub_run(["launchctl", "load", str(plist_path)], check=True)
+
+def load_plist(plist_path: Path) -> int:
+    """Load the .plist into launchd so it fires at pipeline_trigger_time.
+
+    Returns 0 on success, 1 on failure. On macOS bootstrap errors (exit 5),
+    prints a diagnostic hint. The old `launchctl assign-name` call has been
+    removed — launchd handles service naming via the <Label> element in the .plist.
+    """
+    from config import config # pylint: disable=import-outside-toplevel   # delay import
+
+    result = _sub_run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
+    if result.returncode != 0:
+        return _launchd_error("load", (result.stderr or "").strip())
+
     trigger_str = config.pipeline_trigger_time.strftime("%H:%M")
     print(f"Loaded {plist_path} — pipeline will now trigger daily at {trigger_str}.")
-
-    # Register domain name so `launchctl list` recognises it
-    try:
-        _sub_run(
-            ["launchctl", "assign-name", domain, "process"],
-            check=False,
-        )
-    except Exception: # pylint: disable=broad-exception-caught
-        pass  # Domain registration is optional for basic operation
-
     return 0
 
 
-def unload_plist(plist_path: Path, domain: str = "com.hedeghogcambs.pipeline") -> int:
+def unload_plist(plist_path: Path) -> int:
     """Unload the .plist (disable daily trigger)."""
     from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
 
-    _sub_run(["launchctl", "unload", str(plist_path)], check=True)
+    result = _sub_run(["launchctl", "unload", str(plist_path)], capture_output=True, text=True)
+    if result.returncode != 0:
+        return _launchd_error("unload", (result.stderr or "").strip())
+
     trigger_str = config.pipeline_trigger_time.strftime("%H:%M")
     print(f"Unloaded {plist_path} — daily {trigger_str} trigger disabled.")
-
-    try:
-        _sub_run(
-            ["launchctl", "unassign-name", domain, "process"],
-            check=False,
-        )
-    except Exception: # pylint: disable=broad-exception-caught
-        pass
-
     return 0
 
 
 def fire_now() -> int:
     """Run the pipeline immediately (for testing)."""
-    print("[TEST-MODE] Pipeline firing now.")
+    print("[TEST-MODE] Pipeline triggered at %s." % _datetime.now().time())
     # Import here to avoid circular imports when run_pipeline isn't on sys.path
     import subprocess as sp # pylint: disable=import-outside-toplevel
     result = sp.run(
@@ -110,6 +122,7 @@ def fire_now() -> int:
         cwd=str(Path(__file__).parent),
         check=False,
     )
+    print("[TEST-MODE] Exited with code %d." % result.returncode)
     return result.returncode
 
 
@@ -118,13 +131,15 @@ def fire_pipeline() -> int:
     from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
 
     trigger_str = config.pipeline_trigger_time.strftime("%H:%M")
-    print(f"[schedule] {trigger_str} trigger — running pipeline now.")
-    return _sub_run(
+    print(f"[schedule] {trigger_str} trigger — triggered at {_datetime.now().time()}.")
+    result = _sub_run(
         [sys.executable, str(Path(__file__).parent / "run_pipeline.py")],
         cwd=str(Path(__file__).parent),
         timeout=300,  # 5-minute safety cap for the full mock pipeline
         check=False,
-    ).returncode
+    )
+    print(f"[schedule] Exited with code {result.returncode}.")
+    return result.returncode
 
 
 def main() -> int:
@@ -138,8 +153,10 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(
         description="schedule.py — Stage 0 launchd wrapper",
-        epilog="Without args: runs the pipeline \n"
-               "(this is what launchd invokes at pipeline_trigger_time).",
+        epilog=(
+            "Without args: runs the pipeline "
+            "(this is what launchd invokes at pipeline_trigger_time)."
+        ),
     )
     parser.add_argument("--setup-plist", action="store_true",
                         help="Generate and load the .plist for today's trigger time triggers")
