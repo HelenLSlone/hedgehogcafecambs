@@ -1,0 +1,8 @@
+# ── hedgehogCafeCambs — dev & CI requirements ───────────────────────
+# Installed with:  python3 -m pip install -r requirements-dev.txt
+# This project has no venv; everything ships in site-packages alongside
+# the runtime deps in requirements.txt (pydantic, python-dotenv, pytest).
+
+pytest>=8.0
+pylint>=3.0
+pytest-asyncio>=0.21
