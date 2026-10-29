@@ -1,11 +1,10 @@
 """
-config.py — Stage 0 Configuration Scaffold
+config.py
 
 All pipeline values loaded from .env via dotenv + validated at import time
 with Pydantic BaseModel(). Fails fast with clear errors if required keys
 are missing or malformed.
 
-New stages add their own .env keys here as bridge libraries are selected in Stage 1.
 """
 
 from datetime import time as _time
@@ -20,8 +19,9 @@ class EnvConfig(BaseModel):
     model_config = {"extra": "forbid"}  # reject unknown .env keys at load time
 
     # ------------------------------------------------------------------
-    # Stage 0 — Core pipeline metadata (used by schedule + dusk/dawn calc)
+    # Core pipeline metadata (used by schedule + dusk/dawn calc)
     # ------------------------------------------------------------------
+    timezone_name: str                     # IANA timezone name, e.g. Europe/London
     latitude: float                        # camera latitude
     longitude: float                       # camera longitude
     dusk_offset_minutes: int               # offset after sunset for window start
@@ -29,10 +29,12 @@ class EnvConfig(BaseModel):
     pipeline_trigger_time: _time           # scheduled trigger time, e.g. 07:00
 
     # ------------------------------------------------------------------
-    # Stage 1 — Ring API (placeholder)
+    # Ring API
     # ------------------------------------------------------------------
-    ring_api_token: str                    # access token from third-party bridge
-    ring_accessories_url: str              # base URL for the bridge /accessories endpoint
+    ring_username: str                       # Ring account username (email)
+    ring_password: str                       # Ring account password
+    ring_camera_filter: str                  # e.g. "Hedgehog Cam" — prefix on _all_devices
+    ring_token_cache_file: str               # e.g. "ring.token.cache"
 
     # ------------------------------------------------------------------
     # Stage 2 — Ollama / Qwen model (placeholder)
@@ -51,14 +53,22 @@ class EnvConfig(BaseModel):
     # ------------------------------------------------------------------
     sqlite_path: str                       # local SQLite path for example data
 
-    # ------------------------------------------------------------------
-    # Validators — fail early with actionable messages
-    # ------------------------------------------------------------------
+    # -- Validators that consume string fields ------------------------------
+    @field_validator("timezone_name")
+    @classmethod
+    def _validate_timezone(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError(
+                "timezone_name must be a valid IANA name (e.g. Europe/London)."
+            )
+        return v
+
+    # -- Validators — fail early with actionable messages -------------------
 
     @field_validator("latitude", "longitude")
     @classmethod
     def _validate_coords(cls, v: float) -> float:
-        if not (-90 <= v <= 90):
+        if not -90 <= v <= 90:
             raise ValueError(f"Latitude/longitude must be between -90 and 90 — got {v}.")
         return v
 
@@ -78,6 +88,15 @@ class EnvConfig(BaseModel):
         if not v or not str(v).strip():
             raise ValueError(
                 "pipeline_trigger_time must be a valid time string (e.g. '07:00')."
+            )
+        return v
+
+    @field_validator("ring_token_cache_file")
+    @classmethod
+    def _validate_token_cache_path(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError(
+                "ring_token_cache_file must not be empty — provide a .token/cache path."
             )
         return v
 
@@ -110,11 +129,12 @@ except Exception as _exc:
 
 # Every field on EnvConfig must be present and non-blank in .env.
 # Dotenv returns "" or None for missing/empty keys; we fail loudly.
-_required_fields = list(EnvConfig.model_fields.keys())
+_optional_fields: set[str] = {"ring_otp"}
+_required_fields = [k for k in EnvConfig.model_fields.keys() if k not in _optional_fields]
 for field_name in _required_fields:
     value = getattr(config, field_name)
     display_value = str(value).strip()
-    if not display_value or display_value == "":
+    if not display_value:
         raise RuntimeError(
             f"Required .env key is empty/missing: '{field_name}'. "
         )

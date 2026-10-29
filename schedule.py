@@ -12,15 +12,17 @@ The accompanying .plist is expected to live at:
 """
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 from subprocess import run as _sub_run
 
+# Placeholder
+SCRIPT_PATH=str(Path(__file__).resolve())
+
 
 def make_plist() -> Path:
     """Write (or overwrite) the launchd plist to the standard location."""
-    from config import config  # delay import so argparse-first path still works
+    from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
 
     home = Path.home()
     plist_dir = home / "Library" / "LaunchAgents"
@@ -61,7 +63,7 @@ def make_plist() -> Path:
 
 def load_plist(plist_path: Path, domain: str = "com.hedeghogcambs.pipeline") -> int:
     """Load the .plist into launchd so it fires at pipeline_trigger_time."""
-    from config import config
+    from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
 
     _sub_run(["launchctl", "load", str(plist_path)], check=True)
     trigger_str = config.pipeline_trigger_time.strftime("%H:%M")
@@ -73,7 +75,7 @@ def load_plist(plist_path: Path, domain: str = "com.hedeghogcambs.pipeline") -> 
             ["launchctl", "assign-name", domain, "process"],
             check=False,
         )
-    except Exception:
+    except Exception: # pylint: disable=broad-exception-caught
         pass  # Domain registration is optional for basic operation
 
     return 0
@@ -81,7 +83,7 @@ def load_plist(plist_path: Path, domain: str = "com.hedeghogcambs.pipeline") -> 
 
 def unload_plist(plist_path: Path, domain: str = "com.hedeghogcambs.pipeline") -> int:
     """Unload the .plist (disable daily trigger)."""
-    from config import config
+    from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
 
     _sub_run(["launchctl", "unload", str(plist_path)], check=True)
     trigger_str = config.pipeline_trigger_time.strftime("%H:%M")
@@ -92,7 +94,7 @@ def unload_plist(plist_path: Path, domain: str = "com.hedeghogcambs.pipeline") -
             ["launchctl", "unassign-name", domain, "process"],
             check=False,
         )
-    except Exception:
+    except Exception: # pylint: disable=broad-exception-caught
         pass
 
     return 0
@@ -102,25 +104,26 @@ def fire_now() -> int:
     """Run the pipeline immediately (for testing)."""
     print("[TEST-MODE] Pipeline firing now.")
     # Import here to avoid circular imports when run_pipeline isn't on sys.path
-    import os, subprocess as sp
+    import subprocess as sp # pylint: disable=import-outside-toplevel
     result = sp.run(
         [sys.executable, str(Path(__file__).parent / "run_pipeline.py")],
         cwd=str(Path(__file__).parent),
+        check=False,
     )
     return result.returncode
 
 
 def fire_pipeline() -> int:
     """Run the pipeline via subprocess (same path as --test-now)."""
-    from config import config
+    from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
 
     trigger_str = config.pipeline_trigger_time.strftime("%H:%M")
     print(f"[schedule] {trigger_str} trigger — running pipeline now.")
-    import sys as _sys
     return _sub_run(
-        [_sys.executable, str(Path(__file__).parent / "run_pipeline.py")],
+        [sys.executable, str(Path(__file__).parent / "run_pipeline.py")],
         cwd=str(Path(__file__).parent),
         timeout=300,  # 5-minute safety cap for the full mock pipeline
+        check=False,
     ).returncode
 
 
@@ -132,15 +135,18 @@ def main() -> int:
         python schedule.py --test-now      # fire pipeline now instead of waiting
         python schedule.py --unload-plist  # disable the daily trigger
     """
-    import argparse
 
     parser = argparse.ArgumentParser(
         description="schedule.py — Stage 0 launchd wrapper",
-        epilog="Without args: runs the pipeline (this is what launchd invokes at pipeline_trigger_time).",
+        epilog="Without args: runs the pipeline \n"
+               "(this is what launchd invokes at pipeline_trigger_time).",
     )
-    parser.add_argument("--setup-plist", action="store_true", help="Generate and load the .plist for today's trigger time triggers")
-    parser.add_argument("--unload-plist", action="store_true", help="Unload the .plist (disable daily trigger)")
-    parser.add_argument("--test-now", action="store_true", help="Fire pipeline now instead of waiting for scheduled trigger")
+    parser.add_argument("--setup-plist", action="store_true",
+                        help="Generate and load the .plist for today's trigger time triggers")
+    parser.add_argument("--unload-plist", action="store_true",
+                        help="Unload the .plist (disable daily trigger)")
+    parser.add_argument("--test-now", action="store_true",
+                        help="Fire pipeline now instead of waiting for scheduled trigger")
 
     args = parser.parse_args()
 
@@ -159,7 +165,8 @@ def main() -> int:
         print("No .plist found — nothing to unload.")
         return 0
 
-    # No CLI flags passed → launchd at pipeline_trigger_time (or user ran `python schedule.py` directly).
+    # No CLI flags passed →
+    # launchd at pipeline_trigger_time (or user ran `python schedule.py` directly).
     # Fire the pipeline.
     return fire_pipeline()
 

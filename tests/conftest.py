@@ -8,7 +8,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-
-def _ensure_logs_dir() -> None:
-    """Stage 0 pipeline creates logs/pipeline.log; ensure parent exists."""
-    (PROJECT_ROOT / "logs").mkdir(exist_ok=True)
+# Ensure logs/ exists so pipeline stages that write logs/pipeline.log
+# don't crash with FileNotFoundError during test runs.
+(PROJECT_ROOT / "logs").mkdir(exist_ok=True)

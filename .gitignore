@@ -3,23 +3,16 @@
 .qwen*
 .DS_Store
 .vscode/
+memory/
 
 # Python cache
 __pycache__/
-*.egg-info/
+.ruff_cache/
+.pytest_cache/
 
 # Logs
 logs/
 
 # Secrets
 .env
-
-# Data
-data/examples.db
-
-# Ollama models (massive disk space)
-~/.ollama/models/
-
-# Virtual environments
-venv/
-.venv/
+*.token.cache

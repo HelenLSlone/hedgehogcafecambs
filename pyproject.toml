@@ -1,0 +1,11 @@
+[tool.pylint.exceptions]
+overgeneral-exceptions = ["builtins.Exception"]
+
+[tool.pylint.similarities]
+min-similarity-lines = 10
+
+[tool.pylint.messages]
+disable = ["C0114", "C0115", "C0116"]
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "v", "x", "y", "f", "e"]
