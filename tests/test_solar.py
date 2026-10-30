@@ -15,8 +15,9 @@ import pytest
 
 from pipeline.solar import (
     _compute_utc_twilight_minutes,
-    get_dawn_dawn,
+    _minutes_to_utc_dt,
     get_window_with_offsets,
+    get_dawn_dawn,
     validate_coords,
 )
 
@@ -108,37 +109,6 @@ class TestGetDawnDawn:
         with pytest.raises(ValueError, match="Longitude must be between"):
             get_dawn_dawn(LAT, -181.0)
 
-
-# ===========================================================================
-# get_window_with_offsets — offset application
-# =================================================================----------
-
-class TestGetWindowWithOffsets:
-    """Tests for get_window_with_offsets(date=None)."""
-
-    def test_zero_offsets_match_get_dawn_dawn(self) -> None:
-        """Window with config offsets falls between base dawn/dusk."""
-        target_date = date(2026, 10, 17)
-
-        _, base_dusk = get_dawn_dawn(LAT, LON, target_date)
-        win_start, _win_end = get_window_with_offsets(date=target_date)
-
-        # The window is widened by config offsets, so we just verify it falls
-        # within a reasonable range of the baseline computation.
-        assert (win_start - base_dusk).total_seconds() < 7200, \
-            "Window start must be within 2 hours of base dusk"
-
-    def test_positive_offsets_widen_window(self) -> None:
-        """Windows return sensible ranges; offsets widen from config values."""
-        target_date = date(2026, 10, 17)
-
-        base_dawn, base_dusk = get_dawn_dawn(LAT, LON, target_date)
-        win_start, win_end = get_window_with_offsets(date=target_date)
-
-        # Just verify the function works and returns reasonable values.
-        assert win_start < win_end, "Window start must be before end"
-        assert base_dawn <= win_start <= base_dusk or win_start <= base_dawn
-
     def test_polar_edge_case_returns_single_noon_value(self) -> None:
         """At high latitudes where sun never reaches −6° elevation, returns
         a single-noon tuple for both dawn and dusk."""
@@ -168,6 +138,74 @@ class TestGetWindowWithOffsets:
         # Dusk should be after ~20:00 local.
         assert dusk.hour > 20 or (dusk.hour == 20 and dusk.minute > 30), \
             f"Summer dusk {dusk} should be very late at 52°N"
+
+class TestNocturnalWindow:
+    """Tests for the dusk→dawn nocturnal window in get_window_with_offsets."""
+
+    def test_window_spans_midnight(self) -> None:
+        """Nocturnal window must cross midnight: dusk (prev day) → dawn (today)."""
+        target_date = date(2026, 10, 17)
+        win_start, win_end = get_window_with_offsets(date=target_date)
+
+        # The key invariant: start.day != end.day and they are adjacent.
+        assert win_start.date() != win_end.date(), \
+            f"Window must span midnight: {win_start} → {win_end}"
+        delta_days = (win_end.date() - win_start.date()).days
+        assert delta_days == 1, \
+            f"Expected adjacent days, got start={win_start.date()}, end={win_end.date()}"
+
+        # Also verify dawn < dusk in wall-clock order within each day.
+        assert win_start.hour <= 18, f"dusk window should be evening {win_start}"
+        assert win_end.hour >= 4, f"dawn window should be morning {win_end}"
+
+    def test_offsets_widen_night_window(self) -> None:
+        """Offsets widen the night window: dusk pushed earlier, dawn pushed later.
+
+        Config values: dusk_offset_minutes=30, dawn_offset_minutes=-30.
+        Expected after _build_nocturnal_window fix:
+          - dusk  = prev_dusk_min - dusk_off(30)      →  subtract 30  → earlier ✓
+          - dawn  = today_dawn_min - dawn_off(-30)    →  add 30     → later ✓
+        """
+        target_date = date(2026, 10, 17)
+
+        win_start_0, win_end_0 = get_window_with_offsets(date=target_date)
+
+        # Use _compute_utc_twilight_minutes directly — it gives raw minute-floats
+        # for the prev day's dusk (index [1]) and today's dawn (index [0]).
+        prev_min = _compute_utc_twilight_minutes(LAT, LON, 2026, 10, 16)
+        today_min = _compute_utc_twilight_minutes(LAT, LON, 2026, 10, 17)
+        base_dusk_min = prev_min[1]    # Oct 16 dusk in minutes from midnight
+        base_dawn_min = today_min[0]   # Oct 17 dawn in minutes from midnight
+
+        # Convert minute-floats to comparable datetimes.
+        base_dusk_dt = _minutes_to_utc_dt(2026, 10, 16, base_dusk_min)
+        base_dawn_dt = _minutes_to_utc_dt(2026, 10, 17, base_dawn_min)
+
+        # dusk offset (+30): pushes window earlier → diff should be ~-30 min.
+        diff_start = (win_start_0 - base_dusk_dt).total_seconds() / 60
+        assert -50 <= diff_start < 0, \
+            f"Expected dusk pushed earlier by ~30min (diff negative), got {diff_start:.1f}min"
+
+        # dawn offset (-30); negate → add 30: pushes window later → diff should be ~+30.
+        diff_end = (win_end_0 - base_dawn_dt).total_seconds() / 60
+        assert 0 < diff_end <= 50, \
+            f"Expected dawn pushed later by ~30min (diff positive), got {diff_end:.1f}min"
+
+    def test_window_values_match_expected_night_span(self) -> None:
+        """Oct 17 night window should span ~evening to ~early-morning dawn.
+
+        Expected (after fix): dusk pushed earlier by dusk_offset, dusk on prev
+        day; dawn pushed later by dawn_offset, dawn on today.
+        For Cambridgeshire Oct 17: start≈17:09 UTC (Oct 16), end≈06:25 UTC (Oct 17).
+        """
+        target_date = date(2026, 10, 17)
+        win_start, win_end = get_window_with_offsets(date=target_date)
+
+        # Rough boundaries for Cambridgeshire on mid-Oct.
+        assert win_start.hour == 17, f"Expected evening start hour 17 {win_start}"
+        assert win_start.minute < 15, f"dusk-window should be ~Oct16 17:09 {win_start}"
+
+        assert win_end.hour == 6, f"Expected early-morning end hour 6 {win_end}"
 
 
 # ===========================================================================

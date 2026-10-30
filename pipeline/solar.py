@@ -18,6 +18,7 @@ from calendar import isleap
 from datetime import (
     UTC,
     datetime,
+    timedelta,
 )
 from datetime import (
     date as _date,
@@ -130,7 +131,6 @@ def _minutes_to_utc_dt(year: int, month: int, day: int,
 def _compute_utc_twilight_minutes(lat: float, lon: float,
                                   year: int, month: int, day: int) -> tuple[float, float] | None:
     """Internal: compute dawn/dusk as minutes from midnight UTC."""
-
     elev = -6.0  # civil twilight threshold
     ha_deg = _hour_angle_for_elevation(lat, year, month, day, elev)
 
@@ -205,33 +205,38 @@ def get_dawn_dawn(
     )
 
 
-def _build_twilight_window(
-    base_dawn_min: float,
-    base_dusk_min: float,
+def _build_nocturnal_window(
+    prev_dusk_min: float,
+    today_dawn_min: float,
     dawn_off: int,
     dusk_off: int,
-    ymd: tuple[int, int, int],
+    ymd_prev: tuple[int, int, int],
+    ymd_today: tuple[int, int, int],
 ) -> tuple[datetime, datetime]:
-    """Apply offsets to base dawn/dusk minutes and return timezone-aware UTC datetimes."""
-    _year, _month, _day = ymd
-    window_start_min = base_dawn_min - dawn_off
-    window_end_min = base_dusk_min + dusk_off
-
-    window_start_utc = _minutes_to_utc_dt(_year, _month, _day, window_start_min)
-    window_end_utc = _minutes_to_utc_dt(_year, _month, _day, window_end_min)
-
-    return (window_start_utc, window_end_utc)
+    """Apply offsets and return (yesterday_dusk_utc, today_dawn_utc)."""
+    _py, _pm, _pd = ymd_prev
+    _ty, _tm, _td = ymd_today
+    dusk_utc = _minutes_to_utc_dt(_py, _pm, _pd, prev_dusk_min - dusk_off)
+    dawn_utc = _minutes_to_utc_dt(_ty, _tm, _td, today_dawn_min - dawn_off)
+    return (dusk_utc, dawn_utc)
 
 
 def get_window_with_offsets(
     date: _date | None = None,
 ) -> tuple[datetime, datetime]:
-    """Compute dawn/dusk window using all values from config at import time.
+    """Compute dusk→dawn nocturnal window using config from import time.
 
-    Returns
-    -------
-    Tuple ``(window_start_utc, window_end_utc)`` — both timezone-aware UTC
-    datetimes computed from solar lat/lon + dusk/dawn offset configs.
+    Returns ``(window_start_utc, window_end_utc)`` for the overnight period.
+
+    The window spans **from yesterday's dusk through today's dawn**:
+    - window_start = dusk on the day before ``date`` + dusk offset
+    - window_end   = dawn on ``date`` - dawn offset
+
+    This matches the nocturnal animal camera pipeline: darkness starts
+    (evening), then light returns (morning).
+
+    Read lat/lon and offsets from ``config.config`` at call time.
+
     """
     _cfg = config.config
     lat = float(_cfg.latitude)
@@ -244,20 +249,30 @@ def get_window_with_offsets(
     if date is None:
         date = datetime.now(UTC).date()
 
-    minutes_result = _compute_utc_twilight_minutes(
-        lat, lon, date.year, date.month, date.day,
+    today: _date = date
+    yesterday = today - timedelta(days=1)
+
+    # Compute BOTH the previous day's dusk AND today's dawn.
+    prev_min = _compute_utc_twilight_minutes(
+        lat, lon, yesterday.year, yesterday.month, yesterday.day,
+    )
+    today_min = _compute_utc_twilight_minutes(
+        lat, lon, today.year, today.month, today.day,
     )
 
-    if minutes_result is None:
-        # Polar edge case — sun never reaches civil twilight elevation.
-        noon_utc = datetime(date.year, date.month, date.day, 12, 0, 0, tzinfo=UTC)
-        return (noon_utc, noon_utc)
+    if prev_min is None or today_min is None:
+        # Polar edge — fall back to noon placeholder for today.
+        noon = datetime(today.year, today.month, today.day, 12, 0, 0, tzinfo=UTC)
+        return (noon, noon)
 
-    base_dawn_min, base_dusk_min = minutes_result
+    dusk_prev_min = prev_min[1]   # last_dusk
+    dawn_today_min = today_min[0]  # today_dawn
 
-    return _build_twilight_window(
-        base_dawn_min, base_dusk_min, dawn_off, dusk_off,
-        (date.year, date.month, date.day),
+    return _build_nocturnal_window(
+        dusk_prev_min, dawn_today_min,
+        dawn_off, dusk_off,
+        (yesterday.year, yesterday.month, yesterday.day),
+        (today.year, today.month, today.day),
     )
 
 
