@@ -17,12 +17,21 @@ from datetime import datetime as _datetime
 from pathlib import Path
 from subprocess import run as _sub_run
 
+from config import config
+
 SCRIPT_PATH = str(Path(__file__).resolve())
+
+
+def _pause() -> None:
+    """Central pause point for ``--keep-open``. Shared by ALL CLI branches."""
+    try:
+        input("Press Enter to continue …")
+    except EOFError:  # piped / non-interactive — don't block forever
+        pass
 
 
 def make_plist() -> Path:
     """Write (or overwrite) the launchd plist to the standard location."""
-    from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
 
     home = Path.home()
     plist_dir = home / "Library" / "LaunchAgents"
@@ -87,9 +96,11 @@ def load_plist(plist_path: Path) -> int:
     prints a diagnostic hint. The old `launchctl assign-name` call has been
     removed — launchd handles service naming via the <Label> element in the .plist.
     """
-    from config import config # pylint: disable=import-outside-toplevel   # delay import
 
-    result = _sub_run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
+    result = _sub_run(
+        ["launchctl", "load", str(plist_path)],
+        capture_output=True, text=True, check=False,
+    )
     if result.returncode != 0:
         return _launchd_error("load", (result.stderr or "").strip())
 
@@ -100,9 +111,11 @@ def load_plist(plist_path: Path) -> int:
 
 def unload_plist(plist_path: Path) -> int:
     """Unload the .plist (disable daily trigger)."""
-    from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
 
-    result = _sub_run(["launchctl", "unload", str(plist_path)], capture_output=True, text=True)
+    result = _sub_run(
+        ["launchctl", "unload", str(plist_path)],
+        capture_output=True, text=True, check=False,
+    )
     if result.returncode != 0:
         return _launchd_error("unload", (result.stderr or "").strip())
 
@@ -112,34 +125,27 @@ def unload_plist(plist_path: Path) -> int:
 
 
 def fire_now(keep_open: bool = False) -> int:
-    """Run the pipeline immediately (for testing).
+    """Fire the pipeline immediately (for --test-now).
 
-    When ``keep_open`` is True, pauses at the end so terminal output is
-    readable before auto-close on macOS.
+    Pauses before returning if keep_open is True.
     """
-    print("[TEST-MODE] Pipeline triggered at %s." % _datetime.now().time())
-    # Import here to avoid circular imports when run_pipeline isn't on sys.path
-    import subprocess as sp # pylint: disable=import-outside-toplevel
-    result = sp.run(
+    print(f"[TEST-MODE] Pipeline triggered at {_datetime.now().time()}.")
+    result = _sub_run(
         [sys.executable, str(Path(__file__).parent / "run_pipeline.py")],
         cwd=str(Path(__file__).parent),
         check=False,
     )
-    print("[TEST-MODE] Exited with code %d." % result.returncode)
-
+    print(f"[TEST-MODE] Exited with code {result.returncode}.")
     if keep_open:
-        print("Press Enter to close this window …")
-        try:
-            input()
-        except EOFError:  # non-interactive stdin — don't block forever
-            pass
-
+        _pause()
     return result.returncode
 
 
-def fire_pipeline() -> int:
-    """Run the pipeline via subprocess (same path as --test-now)."""
-    from config import config # pylint: disable=import-outside-toplevel   # delay import so argparse-first path still works
+def fire_pipeline(keep_open: bool = False) -> int:
+    """Run the pipeline via subprocess (same path as --test-now).
+    
+    Pauses before returning if keep_open is True.
+    """
 
     trigger_str = config.pipeline_trigger_time.strftime("%H:%M")
     print(f"[schedule] {trigger_str} trigger — triggered at {_datetime.now().time()}.")
@@ -150,6 +156,8 @@ def fire_pipeline() -> int:
         check=False,
     )
     print(f"[schedule] Exited with code {result.returncode}.")
+    if keep_open:
+        _pause()
     return result.returncode
 
 
@@ -170,35 +178,43 @@ def main() -> int:
         ),
     )
     parser.add_argument("--setup-plist", action="store_true",
-                        help="Generate and load the .plist for today's trigger time triggers")
+                        help="Generate and load .plist for today's trigger time")
     parser.add_argument("--unload-plist", action="store_true",
                         help="Unload the .plist (disable daily trigger)")
     parser.add_argument("--test-now", action="store_true",
                         help="Fire pipeline now instead of waiting for scheduled trigger")
-    parser.add_argument("--keep-open", action="store_true",
-                        help="Keep terminal open after --test-now to read output")
+    parser.add_argument(
+        "--keep-open", action="store_true",
+        help="Pause before exit so terminal output is readable (all code paths)",
+    )
 
     args = parser.parse_args()
 
     if args.test_now:
-        return fire_now()
+        return fire_now(keep_open=args.keep_open)
 
     if args.setup_plist:
         plist_path = make_plist()
-        return load_plist(plist_path)
+        code = load_plist(plist_path)
+        if args.keep_open:
+            _pause()
+        return code
 
     if args.unload_plist:
         plist_dir = Path.home() / "Library" / "LaunchAgents"
         plist_path = plist_dir / "com.hedeghogcambs.pipeline.plist"
         if plist_path.exists():
-            return unload_plist(plist_path)
+            code = unload_plist(plist_path)
+            if args.keep_open:
+                _pause()
+            return code
         print("No .plist found — nothing to unload.")
+        if args.keep_open:
+            _pause()
         return 0
 
-    # No CLI flags passed →
-    # launchd at pipeline_trigger_time (or user ran `python schedule.py` directly).
-    # Fire the pipeline.
-    return fire_pipeline()
+    # No flags passed → launchd at pipeline_trigger_time (or direct CLI call).
+    return fire_pipeline(keep_open=args.keep_open)
 
 
 if __name__ == "__main__":
