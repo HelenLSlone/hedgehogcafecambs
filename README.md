@@ -115,6 +115,7 @@ Other useful flags:
 | Command | What it does |
 |---|---|
 | `python schedule.py --test-now` | Fire the pipeline immediately (bypasses the scheduled wait) |
+| `python schedule.py --test-now --keep-open` | Same as above, but keeps terminal open to read output |
 | `python schedule.py --unload-plist` | Disable the daily trigger |
 
 Verify it's scheduled:
